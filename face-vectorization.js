@@ -1,32 +1,41 @@
-module.exports = function(RED) {
+module.exports = function (RED) {
   function FaceVectorizationNode(config) {
-      RED.nodes.createNode(this,config);
-      var node = this;
+    RED.nodes.createNode(this, config);
+    this.on("input", async function (msg) {
+      const tf = require("@tensorflow/tfjs-node");
+      const fs = require("fs");
+      const { createCanvas, loadImage } = require("canvas");
 
-      // ONNX.js를 사용하여 FaceNet 모델 로드
-      const onnx = require('onnxjs');
-      const fs = require('fs');
+      async function loadFaceNetModel(modelPath) {
+        const model = await tf.loadLayersModel(`file://${modelPath}`);
+        return model;
+      }
 
-      const modelData = fs.readFileSync(config.modelPath);
-      const model = onnx.ModelProto.decode(new Uint8Array(modelData));
+      async function getFaceEmbedding(model, imagePath) {
+        const img = await loadImage(imagePath);
+        const canvas = createCanvas(160, 160);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, 160, 160);
 
-      // ONNX 런타임 세션 생성
-      const session = new onnx.InferenceSession();
-      session.prepareModel(model);
+        const tensor = tf.node.encodePng(canvas);
+        const normalizedTensor = tf.div(tensor, 255.0);
+        const batchedTensor = normalizedTensor.expandDims(0);
 
-      node.on('input', function(msg) {
-          // 입력 데이터 가져오기
-          const inputData = new onnx.Tensor(new Float32Array(msg.payload), 'float32', [1, 3, 96, 96]);
+        const predictions = await model.predict(batchedTensor);
+        const embedding = predictions.dataSync();
 
-          // 추론 수행
-          const outputData = session.run([inputData]);
+        return embedding;
+      }
 
-          // 결과를 출력으로 설정
-          msg.payload = outputData[0].data;
+      const modelPath = "path_to_face_net_model/model.json"; // FaceNet 모델 경로 설정
+      const imagePath = msg.payload; // 이미지 파일 경로 설정
 
-          // 다음 노드로 메시지 전달
-          node.send(msg);
-      });
+      const model = await loadFaceNetModel(modelPath);
+      const embedding = await getFaceEmbedding(model, imagePath);
+
+      msg.payload = embedding;
+      this.send(msg);
+    });
   }
-  RED.nodes.registerType("face-vectorization",FaceVectorizationNode);
-}
+  RED.nodes.registerType("face-vectorization", FaceVectorizationNode);
+};
